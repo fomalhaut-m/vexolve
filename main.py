@@ -11,24 +11,31 @@ load_dotenv()
 
 
 def main():
-    print("🔮 Vexolve 初始化中...")
+    print("=" * 60)
+    print("  🔮 VEXOLVE - 自我进化的 AI 生命体")
+    print("=" * 60)
     
     agent = VexolveAgent()
     
-    print("✅ Vexolve 已就绪！开始对话（输入 'exit' 退出）：\n")
+    print("✅ 就绪。开始对话（输入 'exit' 退出）：\n")
     
     while True:
-        user_input = input("你: ").strip()
-        
-        if user_input.lower() in ["exit", "quit", "q"]:
-            print("👋 再见！")
+        try:
+            user_input = input("你: ").strip()
+            
+            if user_input.lower() in ["exit", "quit", "q"]:
+                print("\n👋 再见。我会记住今天的每一次思考。\n")
+                break
+            
+            if not user_input:
+                continue
+            
+            response = agent.run(user_input)
+            print(f"\nVexolve: {response}\n")
+            
+        except EOFError:
+            print("\n\n👋 对话结束。")
             break
-        
-        if not user_input:
-            continue
-        
-        response = agent.run(user_input)
-        print(f"Vexolve: {response}\n")
 
 
 if __name__ == "__main__":
