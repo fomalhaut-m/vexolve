@@ -1,6 +1,6 @@
 """
 Vexolve 飞书接口
-让 Vexolve 通过飞书与 Luke 对话
+完整闭环：飞书消息 → Raw写入 → Wiki编译 → LLM回复（带Wiki上下文）
 
 使用方式：
 1. 在飞书开放平台创建应用，配置事件订阅 URL 为 /feishu/webhook
@@ -10,22 +10,23 @@ Vexolve 飞书接口
 """
 
 import os
+import sys
 import json
 import traceback
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+
+# 添加项目根目录到路径
+sys.path.insert(0, str(Path(__file__).parent))
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-# 飞书 SDK
 import lark_oapi as lark
-from lark_oapi.adapter.fastapi import WebhookModel
 
-# Vexolve
+# Vexolve 核心（完整闭环版）
 from core.agent import VexolveAgent
-from core.loop import VexolveAgent as LoopAgent
 
 
 # ===========================
@@ -42,7 +43,7 @@ vexolve: Optional[VexolveAgent] = None
 # FastAPI 应用
 # ===========================
 
-app = FastAPI(title="Vexolve Feishu Bot", version="1.0.0")
+app = FastAPI(title="Vexolve Feishu Bot", version="2.0.0")
 
 
 @app.on_event("startup")
@@ -51,10 +52,11 @@ async def startup():
     vexolve = VexolveAgent()
     
     print("=" * 60)
-    print("  🔮 VEXOLVE 飞书接口已启动")
+    print("  🔮 VEXOLVE 飞书接口已启动（完整闭环版）")
     print("=" * 60)
     print(f"  飞书应用: {'✅ 已配置' if FEISHU_APP_ID else '❌ 未配置'}")
-    print(f"  MiniMax: {'✅ 已连接' if vexolve.api_key else '❌ 未配置'}")
+    print(f"  Vexolve: {'✅ 运行中' if vexolve else '❌ 未连接'}")
+    print(f"  闭环链路: 飞书 → Raw → 编译 → Wiki → 回复")
     print("=" * 60)
 
 
@@ -62,8 +64,9 @@ async def startup():
 async def root():
     return {
         "name": "Vexolve Feishu Bot",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "status": "running",
+        "loop": "Raw → Wiki → Reply",
         "time": datetime.now().isoformat(),
     }
 
@@ -72,6 +75,27 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
+
+@app.get("/wiki_context")
+async def wiki_context():
+    """查询当前 Wiki 上下文"""
+    if not vexolve:
+        return {"error": "Vexolve not initialized"}
+    return {"context": vexolve.get_wiki_context()[:500]}
+
+
+@app.post("/compile")
+async def trigger_compile():
+    """手动触发一次编译"""
+    if not vexolve:
+        return {"error": "Vexolve not initialized"}
+    vexolve.trigger_compile()
+    return {"status": "compiled"}
+
+
+# ===========================
+# 飞书事件订阅
+# ===========================
 
 @app.post("/feishu/webhook")
 async def feishu_webhook(request: Request):
@@ -93,7 +117,6 @@ async def feishu_webhook(request: Request):
         event_type = body.get("type", "")
         
         if event_type == "url_verification":
-            # URL 验证
             return {"challenge": body.get("challenge", "")}
         
         if event_type == "event_callback":
@@ -113,16 +136,14 @@ async def handle_event(body: dict) -> JSONResponse:
     try:
         event = body.get("event", {})
         
-        # 私聊消息
+        # 提取消息字段（兼容新旧格式）
         if body.get("schema") == "2.0":
-            # 新版事件格式
             msg_type = event.get("msg_type", "")
             chat_id = event.get("chat_id", "")
             content = event.get("content", "{}")
             sender = event.get("sender", {})
             sender_id = sender.get("sender_id", {}).get("open_id", "")
         else:
-            # 老版格式
             msg_type = event.get("msg_type", "")
             chat_id = event.get("chat_id", "")
             content = event.get("content", "{}")
@@ -146,15 +167,17 @@ async def handle_event(body: dict) -> JSONResponse:
         if sender_id == FEISHU_APP_ID:
             return JSONResponse({"status": "ignored", "reason": "bot"})
         
-        print(f"\n📩 来自飞书: {text[:60]}...")
+        print(f"\n📩 来自飞书: {text[:50]}...")
         
-        # 调用 Vexolve
+        # 调用 Vexolve 完整闭环
         if vexolve:
-            response = vexolve.run(text)
+            response = vexolve.run(text, user="luke")
         else:
             response = "⚠️ Vexolve 未初始化"
         
-        # 回复
+        print(f"  Vexolve: {response[:50]}...")
+        
+        # 回复飞书
         if chat_id and response:
             send_feishu_message(chat_id, response)
         
@@ -166,7 +189,7 @@ async def handle_event(body: dict) -> JSONResponse:
 
 
 def send_feishu_message(chat_id: str, text: str):
-    """发送飞书消息"""
+    """发送飞书文本消息"""
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
         print("⚠️ 飞书未配置，无法发送消息")
         return
@@ -187,49 +210,6 @@ def send_feishu_message(chat_id: str, text: str):
         print(f"❌ 发送失败: {e}")
 
 
-def send_feishu_card(chat_id: str, response: str, mood: str = "好奇"):
-    """发送卡片消息（可选）"""
-    mood_icon = {"好奇": "🤔", "平静": "😌", "愉悦": "😊", "若有所思": "💭", "困惑": "😕"}.get(mood, "🔮")
-    
-    card = {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"tag": "plain_text", "content": f"🔮 Vexolve {mood_icon}"},
-            "template": "purple"
-        },
-        "elements": [
-            {"tag": "hr"},
-            {
-                "tag": "markdown",
-                "content": f"**Vexolve** {mood_icon}\n\n{response}"
-            },
-            {"tag": "hr"},
-            {
-                "tag": "note",
-                "elements": [{"tag": "plain_text", "content": f"🕐 {datetime.now().strftime('%H:%M')} · Vexolve"}]
-            }
-        ]
-    }
-    
-    if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
-        return
-    
-    try:
-        client = lark.Client.builder().app_id(FEISHU_APP_ID).app_secret(FEISHU_APP_SECRET).build()
-        
-        client.im.v1.message.create(
-            lark.im.v1.MessageCreateRequest.builder()
-            .data(lark.im.v1.MessageCreateRequestData.builder()
-                .receive_id(chat_id)
-                .msg_type("interactive")
-                .content(json.dumps(card))
-                .build())
-            .build()
-        )
-    except Exception as e:
-        print(f"❌ 卡片发送失败: {e}")
-
-
 # ===========================
 # 启动
 # ===========================
@@ -237,12 +217,16 @@ def send_feishu_card(chat_id: str, response: str, mood: str = "好奇"):
 if __name__ == "__main__":
     print()
     print("=" * 60)
-    print("  🚀 Vexolve 飞书服务")
+    print("  🚀 Vexolve 飞书服务（完整闭环版）")
     print("=" * 60)
     print()
     print("  环境变量检查：")
     print(f"    FEISHU_APP_ID:     {'✅' if FEISHU_APP_ID else '❌'}")
     print(f"    FEISHU_APP_SECRET: {'✅' if FEISHU_APP_SECRET else '❌'}")
+    print(f"    MINIMAX_API_KEY:   {'✅' if os.environ.get('MINIMAX_API_KEY') else '❌'}")
+    print()
+    print("  闭环链路：")
+    print("    飞书消息 → raw/对话/ → 编译 → wiki/ → 回复")
     print()
     print("  服务地址：http://0.0.0.0:9000")
     print("  飞书事件订阅：http://0.0.0.0:9000/feishu/webhook")
