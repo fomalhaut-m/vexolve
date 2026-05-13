@@ -57,7 +57,7 @@ class VexolveAgent:
         # 直接从全局环境变量读取，不依赖 .env 文件
         self.api_key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
         self.base_url = os.environ.get("MINIMAX_BASE_URL", "https://api.minimax.chat/v1")
-        self.model = os.environ.get("MINIMAX_MODEL", os.environ.get("DEFAULT_MODEL", "abab6.5s-chat"))
+        self.model = os.environ.get("MINIMAX_MODEL", "MiniMax-2.7")
         
         # 对话历史
         self.messages: List[Message] = []
