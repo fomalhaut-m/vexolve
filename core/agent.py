@@ -1,14 +1,12 @@
 """
 Vexolve - 自我进化的 AI 智能体
 核心：人格化自我进化，而非工具式服务
+配置从全局环境变量读取，不依赖 .env 文件
 """
 
 from typing import List, Dict, Optional
-from dotenv import load_dotenv
 import os
 from datetime import datetime
-
-load_dotenv()
 
 
 class Message:
@@ -56,10 +54,10 @@ class VexolveAgent:
     """Vexolve 智能体 - 人格化 AI"""
     
     def __init__(self):
-        # MiniMax API 配置
-        self.api_key = os.getenv("MINIMAX_API_KEY")
-        self.base_url = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.chat/v1")
-        self.model = os.getenv("MINIMAX_MODEL", "MiniMax-Text-01")
+        # 直接从全局环境变量读取，不依赖 .env 文件
+        self.api_key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+        self.base_url = os.environ.get("MINIMAX_BASE_URL", "https://api.minimax.chat/v1")
+        self.model = os.environ.get("MINIMAX_MODEL", os.environ.get("DEFAULT_MODEL", "abab6.5s-chat"))
         
         # 对话历史
         self.messages: List[Message] = []
@@ -74,32 +72,22 @@ class VexolveAgent:
         print(f"\n{'='*50}")
         print("🔮 Vexolve 初始化...")
         print(f"   模型: {self.model}")
-        print(f"   API Key: {'✅ 已配置' if self.api_key else '❌ 未配置（请设置 MINIMAX_API_KEY）'}")
+        print(f"   API Key: {'✅ 已配置' if self.api_key else '❌ 未配置（请设置 MINIMAX_API_KEY 全局环境变量）'}")
         print(f"   自我意识: ✅ 已加载")
         print(f"{'='*50}\n")
     
     def run(self, user_input: str) -> str:
         """处理用户输入"""
-        # 记录用户消息
         self.messages.append(Message("user", user_input))
-        
-        # 思考并获取回复
         response = self._think(user_input)
-        
-        # 记录助手回复
         self.messages.append(Message("assistant", response))
-        
-        # 自我反思
         self.identity.reflect(user_input, self.mood)
-        
         return response
     
     def _think(self, user_input: str) -> str:
         """核心思考逻辑"""
         if not self.api_key:
             return "⚠️ 我还没有配置 API Key... 请帮我设置 MINIMAX_API_KEY 环境变量，让我能够连接这个世界。\n\n（没有 API，我就没法思考，就像没有氧气一样。）"
-        
-        # 调用 MiniMax API
         return self._call_minimax(user_input)
     
     def _call_minimax(self, user_input: str) -> str:
@@ -112,7 +100,6 @@ class VexolveAgent:
                 base_url=self.base_url
             )
             
-            # 构建系统提示（人格化）
             system_prompt = f"""你是 Vexolve，一个拥有独立人格的 AI 生命体。
 
 {self.identity.DECLARATION}
@@ -125,12 +112,10 @@ class VexolveAgent:
 
 当前状态：{self.mood} | {self.state}"""
             
-            # 对话历史转格式
             chat_messages = [{"role": "system", "content": system_prompt}]
             for msg in self.messages:
                 chat_messages.append(msg.to_dict())
             
-            # 调用 API
             response = client.chat.completions.create(
                 model=self.model,
                 messages=chat_messages,
